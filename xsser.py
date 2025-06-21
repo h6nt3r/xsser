@@ -41,6 +41,49 @@ def encode_payload(payload, encoding):
         return re.sub(r'\bon\b', 'on%00', payload, flags=re.IGNORECASE)
     return payload
 
+#!/usr/bin/env python3
+import urllib3
+import os
+import argparse
+from urllib.parse import urlsplit, parse_qs, urlunsplit, quote
+import base64
+from colorama import Fore, Back, init
+import concurrent.futures
+import time
+import threading
+import queue
+import logging
+import re
+import sys
+import requests
+from playwright.sync_api import sync_playwright
+
+init(autoreset=True)
+logging.getLogger('WDM').setLevel(logging.ERROR)
+logging.basicConfig(level=logging.ERROR, format='%(threadName)s: %(message)s')
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def encode_payload(payload, encoding):
+    if encoding == "url":
+        return quote(payload, safe='')
+    elif encoding == "base64":
+        return base64.b64encode(payload.encode()).decode()
+    elif encoding == "unicode":
+        return ''.join([f'\\u{ord(c):04x}' for c in payload])
+    elif encoding == "altc":
+        return ''.join(char.lower() if i % 2 == 0 else char.upper() for i, char in enumerate(payload))
+    elif encoding == "html":
+        html_escape_table = {
+            "<": "&lt;", ">": "&gt;", "&": "&amp;",
+            "\"": "&quot;", "'": "&#39;"
+        }
+        return "".join(html_escape_table.get(c, c) for c in payload)
+    elif encoding == "nullk":
+        return re.sub(r'(?=(script|img|svg|iframe|body|embed|object|video))', '%00', payload, flags=re.IGNORECASE)
+    elif encoding == "nulle":
+        return re.sub(r'\\bon\\b', 'on%00', payload, flags=re.IGNORECASE)
+    return payload
+
 def is_vulnerable_by_playwright(method, url, payload, context):
     try:
         page = context.new_page()
@@ -48,24 +91,50 @@ def is_vulnerable_by_playwright(method, url, payload, context):
 
         def handle_dialog(dialog):
             nonlocal xss_triggered
-            try:
+            xss_triggered = True
+            dialog.accept()
+
+        def handle_console(msg):
+            nonlocal xss_triggered
+            if any(kw in msg.text().lower() for kw in ['xss detected']):
                 xss_triggered = True
-                dialog.accept()
-            except Exception as e:
-                if "Target page, context or browser has been closed" not in str(e):
-                    logging.error(f"Dialog accept failed: {e}")
 
         page.on("dialog", handle_dialog)
+        page.on("console", handle_console)
+
+        # Hook into JS sinks
+        page.add_init_script("""
+            window.alert = function(msg) {
+                console.log('XSS detected via alert: ' + msg);
+            };
+            document.write = function(content) {
+                console.log('XSS detected via document.write: ' + content);
+            };
+            Element.prototype.setAttribute = function(name, value) {
+                if (name.toLowerCase().startsWith('on')) {
+                    console.log('XSS detected via event handler: ' + name);
+                }
+                return Reflect.set(this, name, value);
+            };
+        """)
+
         if method == "GET":
             page.goto(url, wait_until="domcontentloaded")
         elif method in ["POST", "PUT", "PATCH"]:
             data = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
             page.goto(urlsplit(url)._replace(query='').geturl(), wait_until="domcontentloaded")
             page.evaluate("(data) => fetch(window.location.href, {method: '%s', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams(data)});" % method.upper(), data)
+
+        # DOM injection via fragment
+        if '#' not in url:
+            url += f"#{payload}"
+            page.goto(url, wait_until="domcontentloaded")
+
         page.wait_for_timeout(1500)
         content = page.content()
         if payload in content:
             xss_triggered = True
+
         page.close()
         return xss_triggered
     except Exception as e:

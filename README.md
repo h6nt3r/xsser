@@ -1,13 +1,16 @@
 # 🧪 xsser - Advanced XSS Scanner with Playwright
 ## 🚀 Features
 
-- 🔍 **Playwright-Powered Scanning**: Executes payloads in a real Chromium browser for accurate detection.
+- ✅ **Reflected XSS Detection**
+- ✅ **DOM-Based XSS Detection** via browser instrumentation
 - 🎭 **Payload Encodings**: Supports URL, Base64, Unicode, HTML, AltCaps, null byte (key/element) encoding.
 - 🌐 **HTTP Methods**: Supports GET, POST, PUT, PATCH.
+- 📄 **Input via URL, File, or STDIN**
 - 📄 **Multi-URL Support**: Scan a single URL or batch scan from a file.
 - ✍️ **Custom Payloads**: Accepts payload lists from user-supplied files.
 - 📤 **Export Results**: Optionally write all vulnerable URLs to an output file.
 - 🧠 **Smart Parameter Detection**: Replaces `*` in query parameters to pinpoint test vectors.
+- 💡 **Handles Dialogs, Console Logs, and JS Sinks**
 
 ## 🧬 Payload Encoding Methods
 
@@ -58,3 +61,8 @@ xsser -u "http://testphp.vulnweb.com/Mod_Rewrite_Shop/details.php?id=*&mjqN=ok" 
 -e, --encoding   : Encoding method [none, url, base64, unicode, altc, html, nullk, nulle]
 -x, --methods    : HTTP methods to test (comma-separated, e.g., get,post,put,patch)
 ```
+
+# ⚠️ Legal Disclaimer
+### This tool is for educational and authorized security testing only. Unauthorized use is illegal.
+
+Always get explicit written permission before scanning any system.
