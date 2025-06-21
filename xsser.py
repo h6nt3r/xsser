@@ -12,6 +12,7 @@ import queue
 import logging
 import re
 import sys
+import requests
 from playwright.sync_api import sync_playwright
 
 init(autoreset=True)
@@ -40,7 +41,7 @@ def encode_payload(payload, encoding):
         return re.sub(r'\bon\b', 'on%00', payload, flags=re.IGNORECASE)
     return payload
 
-def is_vulnerable(url, payload, context):
+def is_vulnerable_by_playwright(method, url, payload, context):
     try:
         page = context.new_page()
         xss_triggered = False
@@ -55,15 +56,23 @@ def is_vulnerable(url, payload, context):
                     logging.error(f"Dialog accept failed: {e}")
 
         page.on("dialog", handle_dialog)
-        page.goto(url, wait_until="domcontentloaded")
-        page.wait_for_timeout(1500)  # 1.5s is usually enough for dialog popups
+        if method == "GET":
+            page.goto(url, wait_until="domcontentloaded")
+        elif method in ["POST", "PUT", "PATCH"]:
+            data = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+            page.goto(urlsplit(url)._replace(query='').geturl(), wait_until="domcontentloaded")
+            page.evaluate("(data) => fetch(window.location.href, {method: '%s', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams(data)});" % method.upper(), data)
+        page.wait_for_timeout(1500)
+        content = page.content()
+        if payload in content:
+            xss_triggered = True
         page.close()
         return xss_triggered
     except Exception as e:
         logging.error(f"Error during scan: {e}")
         return False
 
-def inject_payloads(url, payloads, url_index, total_urls, context, vulnerable_payload_count, output_queue=None, encoding="none"):
+def inject_payloads(url, payloads, url_index, total_urls, context, vulnerable_payload_count, output_queue=None, encoding="none", methods=["GET"]):
     vulnerable_urls = []
     scheme, netloc, path, query_string, fragment = urlsplit(url)
     query_params = parse_qs(query_string, keep_blank_values=True)
@@ -85,109 +94,82 @@ def inject_payloads(url, payloads, url_index, total_urls, context, vulnerable_pa
             test_params[key] = [encoded_payload]
             new_query = "&".join(f"{k}={v[0]}" for k, v in test_params.items())
             new_url = urlunsplit((scheme, netloc, path, new_query, fragment))
-            if is_vulnerable(new_url, payload, context):
-                vulnerable_urls.append(new_url)
-                print(Fore.WHITE + "[✓] XSS Vulnerable: " + Back.GREEN + new_url + Back.RESET)
-                vulnerable_payload_count[0] += 1
-                if output_queue:
-                    output_queue.put(new_url)
-            else:
-                print(Fore.RED + f"[✗] Not Vulnerable: {new_url}")
-            print()
+            for method in methods:
+                print(Fore.MAGENTA + f"Method: {method.upper()}")
+                if is_vulnerable_by_playwright(method.upper(), new_url, payload, context):
+                    vulnerable_urls.append(new_url)
+                    print(Fore.WHITE + "[✓] XSS Vulnerable: " + Back.GREEN + new_url + Back.RESET)
+                    vulnerable_payload_count[0] += 1
+                    if output_queue:
+                        output_queue.put(new_url)
+                else:
+                    print(Fore.RED + f"[✗] Not Vulnerable: {new_url}")
+                print()
     return vulnerable_urls
 
-def playwright_worker_thread(thread_id, urls, payloads, total_urls, vulnerable_payload_count, output_queue, rate_limit_semaphore, target_scan_time, encoding):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-        context = browser.new_context()  # Reuse context for all URLs in this thread
-        try:
-            results = []
-            for url_index, url in urls:
-                with rate_limit_semaphore:
-                    print(Fore.YELLOW + f"\nURL({url_index}/{total_urls}): {url}")
-                    start_time = time.time()
-                    found = inject_payloads(url, payloads, url_index, total_urls, context, vulnerable_payload_count, output_queue, encoding)
-                    elapsed_time = time.time() - start_time
-                    sleep_time = max(0, target_scan_time - elapsed_time)
-                    time.sleep(sleep_time)
-                    results.extend(found)
-            return results
-        finally:
-            context.close()  # ✅ Clean up shared context
-            browser.close()
+def get_argument_parser():
+    parser = argparse.ArgumentParser(description="XSS Scanner using Playwright and Chromium")
+    parser.add_argument("-u", "--url", help="Target URL to scan")
+    parser.add_argument("-f", "--file", help="File containing list of URLs to scan")
+    parser.add_argument("-p", "--payloads", required=True, help="File with XSS payloads")
+    parser.add_argument("-o", "--output", help="File to write vulnerable URLs")
+    parser.add_argument("-e", "--encoding", choices=["none", "url", "base64", "unicode", "altc", "html", "nullk", "nulle"], default="none", help="Payload encoding method")
+    parser.add_argument("-x", "--methods", help="Comma-separated HTTP methods to test (e.g., get,post,put,patch)")
+    return parser
 
-def xss_scan(urls, payloads, output_file=None, num_threads=1, encoding="none"):
-    from threading import BoundedSemaphore
-    from math import ceil
+def main():
+    parser = get_argument_parser()
+    args = parser.parse_args()
 
-    all_vulnerable = []
+    methods = args.methods.split(",") if args.methods else ["GET"]
+    methods = [m.strip().upper() for m in methods]
+
+    if args.file:
+        with open(args.file, 'r') as f:
+            urls = [line.strip() for line in f if line.strip()]
+    elif args.url:
+        urls = [args.url]
+    elif not sys.stdin.isatty():
+        urls = [line.strip() for line in sys.stdin if line.strip()]
+    else:
+        print("[-] Error: No URL or file provided.")
+        sys.exit(1)
+
+    with open(args.payloads, 'r') as f:
+        payloads = [line.strip() for line in f if line.strip()]
+
     vulnerable_payload_count = [0]
-    total_urls = len(urls)
+    output_queue = queue.Queue() if args.output else None
 
-    target_scans_per_second_per_thread = 10.0 / max(1, num_threads)
-    target_scan_time = 1.0 / target_scans_per_second_per_thread
-
-    rate_limit_semaphore = BoundedSemaphore(value=num_threads)
-    output_queue = queue.Queue() if output_file else None
-
-    if output_file:
-        def write_output():
-            with open(output_file, 'a') as f:
-                while True:
-                    url = output_queue.get()
-                    if url is None:
-                        output_queue.task_done()
-                        break
-                    f.write(url + '\n')
-                    f.flush()
+    def write_output():
+        with open(args.output, 'a') as f:
+            while True:
+                url = output_queue.get()
+                if url is None:
                     output_queue.task_done()
-        writer_thread = threading.Thread(target=write_output)
+                    break
+                f.write(url + '\n')
+                f.flush()
+                output_queue.task_done()
+
+    writer_thread = threading.Thread(target=write_output) if args.output else None
+    if writer_thread:
         writer_thread.start()
 
-    urls_with_index = list(enumerate(urls, start=1))
-    chunk_size = ceil(len(urls) / num_threads)
-    chunks = [urls_with_index[i:i + chunk_size] for i in range(0, len(urls_with_index), chunk_size)]
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(playwright_worker_thread, idx, chunk, payloads, total_urls, vulnerable_payload_count, output_queue, rate_limit_semaphore, target_scan_time, encoding)
-                   for idx, chunk in enumerate(chunks)]
-        for future in concurrent.futures.as_completed(futures):
-            all_vulnerable.extend(future.result())
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        try:
+            for index, url in enumerate(urls, start=1):
+                print(Fore.YELLOW + f"\nURL({index}/{len(urls)}): {url}")
+                inject_payloads(url, payloads, index, len(urls), context, vulnerable_payload_count, output_queue, args.encoding, methods)
+        finally:
+            context.close()
+            browser.close()
 
     if output_queue:
         output_queue.put(None)
         writer_thread.join()
 
-    print(Fore.GREEN + f"\nTotal XSS Vulnerabilities Found: {vulnerable_payload_count[0]}")
-    return all_vulnerable
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="XSS Scanner using Playwright and Chromium")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("-f", "--file", help="File with URLs to scan")
-    group.add_argument("-u", "--url", help="Single URL to scan")
-    parser.add_argument("-p", "--payloads", required=True, help="File with XSS payloads")
-    parser.add_argument("-o", "--output", help="Output file to save vulnerable URLs")
-    parser.add_argument("-t", "--threads", type=int, default=1, help="Number of threads")
-    parser.add_argument(
-    "-e", "--encoding",
-    default="none",
-    help="Encoding method for payloads (options: none, url, base64, unicode, altc, html, nullk, nulle)"
-)
-    args = parser.parse_args()
-
-    # Input: file, URL, or stdin
-    if args.file:
-        with open(os.path.expanduser(args.file), "r") as f:
-            urls = [line.strip() for line in f if line.strip()]
-    elif args.url:
-        urls = [args.url.strip()]
-    elif not sys.stdin.isatty():
-        urls = [line.strip() for line in sys.stdin if line.strip()]
-    else:
-        parser.error("one of the arguments -f/--file -u/--url is required (or pipe URLs to stdin)")
-
-    with open(os.path.expanduser(args.payloads), "r") as f:
-        payloads = [line.strip() for line in f if line.strip()]
-
-    xss_scan(urls, payloads, output_file=args.output, num_threads=args.threads, encoding=args.encoding)
+    main()
