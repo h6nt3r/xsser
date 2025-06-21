@@ -32,8 +32,9 @@ xsser supports multiple encoding strategies to bypass input filters and WAFs. Be
 cd /opt/ && sudo git clone https://github.com/h6nt3r/xsser.git && cd xsser
 sudo pip3 install -r requirements.txt --break-system-packages
 playwright install chromium
-sudo ln -sf /opt/xsser/xsser.py /usr/local/bin/xsser
 cd
+sudo chmod +x /opt/xsser/xsser.py
+sudo ln -sf /opt/xsser/xsser.py /usr/local/bin/xsser
 xsser -h
 ```
 # 🧑‍💻 Usage
