@@ -29,7 +29,7 @@ sudo rm -rf ./google-chrome-stable*
 sudo wget "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 sudo apt install ./google-chrome-stable*.deb -y
 sudo rm -rf ./google-chrome-stable*
-sudo pip3 install -r requirements.txt
+sudo pip3 install -r requirements.txt --break-system-packages
 sudo ln -sf /opt/xsser/xsser.py /usr/local/bin/xsser
 cd
 xsser -h
