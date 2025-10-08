@@ -20,15 +20,17 @@
 - Google Chrome (or Chromium)
 - ChromeDriver (managed automatically via `webdriver-manager`)
 
-## Installation
-
+#### prerequisite
 ```
-cd /opt/ && sudo git clone https://github.com/h6nt3r/xsser.git && cd xsser/
-sudo chmod +x *
 sudo rm -rf ./google-chrome-stable*
 sudo wget "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 sudo apt install ./google-chrome-stable*.deb -y
 sudo rm -rf ./google-chrome-stable*
+```
+## Installation
+```
+cd /opt/ && sudo git clone https://github.com/h6nt3r/xsser.git && cd xsser/
+sudo chmod +x *.py
 sudo pip3 install -r requirements.txt --break-system-packages
 sudo ln -sf /opt/xsser/xsser.py /usr/local/bin/xsser
 cd
