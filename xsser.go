@@ -55,7 +55,7 @@ type Job struct {
 }
 
 func usage() {
-	fmt.Println(`Advance XSS Scanner
+	fmt.Println(`Advance XSS Scanner v4.0.0
 Developed by: github.com/h6nt3r
 
 Flags:
