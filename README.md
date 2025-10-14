@@ -52,6 +52,20 @@ echo "http://testphp.vulnweb.com/listproducts.php?cat=a&dog=2" | xsser -p payloa
 
 1. Install Go (1.20+ recommended).
 2. Install Chrome/Chromium on your machine.
+```
+go install -v github.com/h6nt3r/xsser@latest
+```
+### Build binary
+```
+git clone https://github.com/h6nt3r/xsser.git
+cd xsser
+go mod init xsser.go
+go mod tidy
+go build -o xsser xsser.go
+sudo mv xsser /usr/local/bin/
+cd
+xsser -h
+```
 
 ## Upcomming features
 
