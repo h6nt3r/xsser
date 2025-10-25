@@ -78,7 +78,18 @@ Flags:
 ```
 
 ---
-
+## Prerequisite
+* Install google-chrome
+```
+sudo wget "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+sudo apt --fix-broken install -y
+sudo apt update --fix-missing
+sudo apt install ./google-chrome-stable*.deb -y
+```
+* Delete google-chrome `.deb` file
+```
+sudo rm -rf ./google-chrome-stable*.deb
+```
 ## 📦 Installation
 
 1. Install Go (1.20+ recommended).
