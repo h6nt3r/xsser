@@ -17,6 +17,9 @@ var (
     totalXSSFound int64
     totalTimeout  int64
     totalError    int64
+
+    // stop flag: যখন Ctrl+C দেয়া হবে, এই ভ্যালু 1 হবে
+    stopping int32
 )
 
 func atomicAddInt64(p *int64, delta int64) { atomic.AddInt64(p, delta) }

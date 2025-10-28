@@ -26,6 +26,7 @@ A fast, XSS scanning tool with payload injection and a silent mode for clean out
 * 📂 **File scanning mode**
 * 📦 **Custom Payload mode**
 * 📌 **Pinpoint/Specific Parameter Injection mode**
+* 🚿 **Spray mode**
 * ⚙️ **Encoding Mechanism**
 * 🤫 **Silent mode**
 * 💾 **Output saving**
@@ -54,6 +55,10 @@ http://testhtml5.vulnweb.com/comment?id=FUZZ
 ```
 xsser -f urls.txt -p payloads.txt -pl "FUZZ" -o out.txt
 ```
+## Spraying mode
+```
+xsser -f urls.txt -p payloads.txt -spray -o out.txt
+```
 ## My favourite command
 ```
 xsser -f urls.txt -p payloads.txt -pl "FUZZ" -e url -o out.txt
@@ -62,18 +67,19 @@ xsser -f urls.txt -p payloads.txt -pl "FUZZ" -e url -o out.txt
 ## 🧭 Options:
 
 ```
-Advance XSS Scanner v4.0.1
+Advance XSS Scanner v4.0.2
 Developed by: github.com/h6nt3r
 
-Flags:
+Options:
  -u string single URL to scan
  -f string file with URLs (one per line)
  -p string payload file (one per line) (required)
- -pl string keyword: only scan parameters(FUZZ) whose value contains this keyword (silent skip otherwise)
+ -pl string keyword: only scan parameters whose value contains this keyword (silent skip otherwise)
  -t int number of worker threads (default 5)
  -T int timeout seconds per test (default 10)
  -e string encoding mechanisms (comma-separated, e.g., url,base64)
  -s silent: only print URLs; white for Not Vulnerable, red for XSS Found
+ -spray bool  spray all payloads to all params of each URL and after end urls, if payloads remain, start again from first URL
  -o string output file (plain text, only XSS found URLs)
 ```
 

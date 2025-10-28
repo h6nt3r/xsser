@@ -28,6 +28,8 @@ func StartWorkers(parentCtx context.Context, allocCtx context.Context, count int
     return &wg
 }
 
+// ... অন্যান্য ইম্পোর্ট ও ফাংশন উপরে থাকবে ...
+
 func worker(id int, jobs <-chan Job, results chan<- string, timeoutSec int, allocCtx context.Context) {
     ctx, cancel := chromedp.NewContext(allocCtx)
     defer cancel()
@@ -36,10 +38,20 @@ func worker(id int, jobs <-chan Job, results chan<- string, timeoutSec int, allo
     _ = chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error { return nil }))
 
     for job := range jobs {
+        // যদি already stopping হয়, দ্রুত বের হয়ে যাও
+        if atomic.LoadInt32(&stopping) == 1 {
+            return
+        }
+
         jobCtx, jobCancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
         // ensure cancel called at end of iteration
         func() {
             defer jobCancel()
+
+            // 또 একবার চেক করে নাও প্রথমেই
+            if atomic.LoadInt32(&stopping) == 1 {
+                return
+            }
 
             found := false
             foundURL := ""
@@ -60,7 +72,13 @@ func worker(id int, jobs <-chan Job, results chan<- string, timeoutSec int, allo
                 }
             })
 
-            mutated := buildMutatedURLWithReserve(job.OriginalURL, job.ParamsOrder, job.TargetParam, job.Payload, job.ReserveValue, job.OtherOrigValues)
+            // build mutated url (spray-aware)
+            mutated := buildMutatedURLWithReserve(job.OriginalURL, job.ParamsOrder, job.TargetParam, job.Payload, job.ReserveValue, job.OtherOrigValues, job.Spray)
+
+            // যদি stopping সেট করা হয়ে থাকে, আমরা নেভিগেটও না করবো
+            if atomic.LoadInt32(&stopping) == 1 {
+                return
+            }
 
             err := chromedp.Run(jobCtx,
                 chromedp.Navigate(mutated),
@@ -82,6 +100,19 @@ func worker(id int, jobs <-chan Job, results chan<- string, timeoutSec int, allo
             default:
             }
 
+            // যদি interrupt এসেছে, তাহলে কোন প্রিন্ট/রেজাল্ট না করে exit করো
+            if atomic.LoadInt32(&stopping) == 1 {
+                return
+            }
+
+            // prepare label: spray হলে (totalParams) দেখাবে, না হলে আগের মত param name with color
+            var label string
+            if job.Spray {
+                label = fmt.Sprintf("(%d)", job.TotalParam)
+            } else {
+                label = fmt.Sprintf("(%s%s%s)", skyblue, job.TargetParam, reset)
+            }
+
             // handle results & print
             if err != nil && !found {
                 if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") {
@@ -89,27 +120,40 @@ func worker(id int, jobs <-chan Job, results chan<- string, timeoutSec int, allo
                 } else {
                     atomic.AddInt64(&totalError, 1)
                 }
+                if atomic.LoadInt32(&stopping) == 1 {
+                    return
+                }
                 if silentOnly {
                     fmt.Printf("%s%s%s\n", white, mutated, reset)
                 } else {
-                    fmt.Printf("[%d/%d] Not Vulnerable (%s%s%s): %s\n\n", job.IdxURL, job.TotalURLs, skyblue, job.TargetParam, reset, mutated)
+                    fmt.Printf("[%d/%d] Not Vulnerable %s: %s\n\n", job.IdxURL, job.TotalURLs, label, mutated)
                 }
                 return
             }
 
             if found {
                 atomic.AddInt64(&totalXSSFound, 1)
+                if atomic.LoadInt32(&stopping) == 1 {
+                    return
+                }
                 if silentOnly {
                     fmt.Printf("%s%s%s\n", red, foundURL, reset)
                 } else {
-                    fmt.Printf("[%d/%d] XSS Found (%s%s%s): %s%s%s\n\n", job.IdxURL, job.TotalURLs, skyblue, job.TargetParam, reset, red, foundURL, reset)
+                    fmt.Printf("[%d/%d] XSS Found %s: %s%s%s\n\n", job.IdxURL, job.TotalURLs, label, red, foundURL, reset)
+                }
+                // ফলাফল রেজাল্ট চ্যানেলে পাঠানোর আগে আবার চেক
+                if atomic.LoadInt32(&stopping) == 1 {
+                    return
                 }
                 results <- foundURL
             } else {
+                if atomic.LoadInt32(&stopping) == 1 {
+                    return
+                }
                 if silentOnly {
                     fmt.Printf("%s%s%s\n", white, mutated, reset)
                 } else {
-                    fmt.Printf("[%d/%d] Not Vulnerable (%s%s%s): %s\n\n", job.IdxURL, job.TotalURLs, skyblue, job.TargetParam, reset, mutated)
+                    fmt.Printf("[%d/%d] Not Vulnerable %s: %s\n\n", job.IdxURL, job.TotalURLs, label, mutated)
                 }
             }
         }()
