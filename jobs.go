@@ -1,41 +1,48 @@
 package main
 
 import (
-	"context"
-	"net/url"
-	"strings"
+    "context"
+    "net/url"
+    "strings"
 )
-
-// Job struct holds the necessary fields for XSS scanning jobs
 type Job struct {
-	OriginalURL     string
-	TargetParam     string
-	Payload         string
-	ReserveValue    string
-	TargetOrigValue string
-	ParamsOrder     []string
-	OtherOrigValues map[string]string
-	IdxURL          int
-	TotalURLs       int
-	IdxParam        int
-	TotalParam      int
-	IdxPayload      int
-	TotalPay        int
-	Encoding        string // encoding type
-	IdxEncoding     int    // encoding index
-	Spray           bool   // spray mode for this job
+    OriginalURL     string
+    TargetParam     string
+    Payload         string
+    ReserveValue    string
+    TargetOrigValue string
+    ParamsOrder     []string
+    OtherOrigValues map[string]string
+    IdxURL          int
+    TotalURLs       int
+    IdxParam        int
+    TotalParam      int
+    IdxPayload      int
+    TotalPay        int
+    Encoding        string
+    IdxEncoding     int
+    Spray           bool // 🔥 নতুন ফিল্ড — spray mode এর জন্য
 }
 
-// BuildJobs kept for compatibility (you can keep or ignore if using StreamJobs)
+
+
+// --- তারপর এখানে থাকবে BuildJobs() এবং StreamJobs() ---
+
+// --- paste/replace BuildJobs and StreamJobs in jobs.go ---
+
+// BuildJobs creates a list of jobs from URLs and payloads
+// Behavior for spray=true (updated):
+//   - iterate over URLs (outer loop) and assign payload = payloads[uIdx % len(payloads)]
+//   - meaning if urls > payloads, payload list will wrap and reuse payloads from start
+//   - one job per URL per encoding (job.Spray = true)
 func BuildJobs(urls []string, payloads []string, paramFilter string, encodings []string, spray bool) ([]Job, error) {
-	// simple wrapper that calls Stream-style builder into a slice (careful with memory)
-	var jobs []Job
+	var jobsList []Job
+
 	if len(urls) == 0 {
-		return jobs, nil
+		return jobsList, nil
 	}
 
-	// reuse StreamJobs logic but accumulate
-	// parse url metas
+	// parse urls once
 	type urlMeta struct {
 		raw        string
 		params     []string
@@ -93,21 +100,22 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 		})
 	}
 
-	// spray mode: iterate payloads cyclically across urls
+	// spray mode: ITERATE URLs, payloads cycle
 	if spray {
 		if len(payloads) == 0 {
-			return jobs, nil
+			return jobsList, nil
 		}
 		encodingList := []string{""}
 		if len(encodings) > 0 {
 			encodingList = encodings
 		}
-		for pIdx, payload := range payloads {
-			uIdx := pIdx % len(metas)
-			meta := metas[uIdx]
+
+		for uIdx, meta := range metas {
 			if len(meta.params) == 0 {
 				continue
 			}
+
+			// paramFilter: require at least one param's original value contains the filter
 			if paramFilter != "" {
 				okAny := false
 				for _, k := range meta.params {
@@ -122,19 +130,25 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 					continue
 				}
 			}
+
+			// choose payload cyclically for this URL
+			payload := payloads[uIdx%len(payloads)]
+
 			reserveValue := ""
 			if v, ok := meta.origValues[meta.params[0]]; ok {
 				reserveValue = v
 			}
+
 			for ei, encoding := range encodingList {
 				encodedPayload := EncodePayload(payload, encoding)
 				otherCopy := make(map[string]string, len(meta.origValues))
 				for kk, vv := range meta.origValues {
 					otherCopy[kk] = vv
 				}
+
 				j := Job{
 					OriginalURL:     meta.raw,
-					TargetParam:     meta.params[0],
+					TargetParam:     meta.params[0], // label only; worker will apply to all params when Spray==true
 					Payload:         encodedPayload,
 					ReserveValue:    reserveValue,
 					TargetOrigValue: meta.origValues[meta.params[0]],
@@ -144,28 +158,31 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 					TotalURLs:       len(urls),
 					IdxParam:        1,
 					TotalParam:      len(meta.params),
-					IdxPayload:      pIdx + 1,
+					IdxPayload:      (uIdx % len(payloads)) + 1, // index of payload used
 					TotalPay:        len(payloads),
 					Encoding:        encoding,
 					IdxEncoding:     ei + 1,
 					Spray:           true,
 				}
-				jobs = append(jobs, j)
+				jobsList = append(jobsList, j)
 			}
 		}
-		return jobs, nil
+
+		return jobsList, nil
 	}
 
-	// non-spray: classic expansion (careful: may use lots of memory)
+	// non-spray (original) behavior unchanged
 	for ui, meta := range metas {
 		if len(meta.params) == 0 {
 			continue
 		}
+
 		reserveValue := ""
 		if v, ok := meta.origValues[meta.params[0]]; ok {
 			reserveValue = v
 		}
 		prevReserve := reserveValue
+
 		for pi, param := range meta.params {
 			if paramFilter != "" {
 				ov := ""
@@ -176,15 +193,18 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 					continue
 				}
 			}
+
 			origVal := ""
 			if v, ok := meta.origValues[param]; ok {
 				origVal = v
 			}
 			currReserve := prevReserve
+
 			encodingList := []string{""}
 			if len(encodings) > 0 {
 				encodingList = encodings
 			}
+
 			for xi, payload := range payloads {
 				for ei, encoding := range encodingList {
 					encodedPayload := EncodePayload(payload, encoding)
@@ -192,6 +212,7 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 					for kk, vv := range meta.origValues {
 						otherCopy[kk] = vv
 					}
+
 					j := Job{
 						OriginalURL:     meta.raw,
 						TargetParam:     param,
@@ -210,17 +231,19 @@ func BuildJobs(urls []string, payloads []string, paramFilter string, encodings [
 						IdxEncoding:     ei + 1,
 						Spray:           false,
 					}
-					jobs = append(jobs, j)
+					jobsList = append(jobsList, j)
 				}
 			}
+
 			prevReserve = origVal
 		}
 	}
-	return jobs, nil
+
+	return jobsList, nil
 }
 
 // StreamJobs streams jobs into provided jobs channel (context-aware).
-// Use StreamJobs to avoid huge memory spikes.
+// Updated spray behavior: iterate URLs and pick payload = payloads[uIdx % len(payloads)]
 func StreamJobs(ctx context.Context, urls []string, payloads []string, paramFilter string, encodings []string, spray bool, jobs chan<- Job) error {
 	// quick sanity
 	if len(urls) == 0 {
@@ -288,17 +311,18 @@ func StreamJobs(ctx context.Context, urls []string, payloads []string, paramFilt
 		if len(payloads) == 0 {
 			return nil
 		}
-		for pIdx, payload := range payloads {
+		for uIdx, meta := range metas {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
-			uIdx := pIdx % len(metas)
-			meta := metas[uIdx]
+
 			if len(meta.params) == 0 {
 				continue
 			}
+
+			// paramFilter: require at least one param orig value contain the filter
 			if paramFilter != "" {
 				okAny := false
 				for _, k := range meta.params {
@@ -313,10 +337,15 @@ func StreamJobs(ctx context.Context, urls []string, payloads []string, paramFilt
 					continue
 				}
 			}
+
+			// choose payload cyclically for this URL
+			payload := payloads[uIdx%len(payloads)]
+
 			reserveValue := ""
 			if v, ok := meta.origValues[meta.params[0]]; ok {
 				reserveValue = v
 			}
+
 			for ei, encoding := range encodingList {
 				select {
 				case <-ctx.Done():
@@ -340,12 +369,13 @@ func StreamJobs(ctx context.Context, urls []string, payloads []string, paramFilt
 					TotalURLs:       len(urls),
 					IdxParam:        1,
 					TotalParam:      len(meta.params),
-					IdxPayload:      pIdx + 1,
+					IdxPayload:      (uIdx % len(payloads)) + 1,
 					TotalPay:        len(payloads),
 					Encoding:        encoding,
 					IdxEncoding:     ei + 1,
 					Spray:           true,
 				}
+
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -356,7 +386,7 @@ func StreamJobs(ctx context.Context, urls []string, payloads []string, paramFilt
 		return nil
 	}
 
-	// non-spray streaming
+	// non-spray streaming unchanged
 	for ui, meta := range metas {
 		if len(meta.params) == 0 {
 			continue
